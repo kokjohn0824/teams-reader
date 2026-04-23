@@ -14,7 +14,7 @@ echo ""
 
 # 1. Python deps
 echo "⬇️  Installing Python dependencies..."
-pip install -r "$INSTALL_DIR/requirements.txt" -q
+python3 -m pip install -r "$INSTALL_DIR/requirements.txt" -q
 echo "   ✅ Dependencies installed"
 
 # 2. Generate SKILL.md from template
@@ -35,7 +35,10 @@ echo ""
 echo "  2. Launch Teams with CDP support (once per Teams restart):"
 echo "     $INSTALL_DIR/teams_launch.sh"
 echo ""
-echo "  3. In Claude Code, use the /teams skill:"
+echo "  3. Restart Claude Code (so it picks up the new skill):"
+echo "     Quit and reopen Claude Code, or run /reload in the CLI"
+echo ""
+echo "  4. In Claude Code, use the /teams skill:"
 echo "     /teams read the latest message from Alice"
 echo "     /teams send to Bob: 'Got it, will check'"
 echo "     /teams summarize unread chats"

@@ -46,15 +46,17 @@ No Graph API tokens. No admin consent. No screen capture.
 ## Install
 
 ```bash
-git clone https://github.com/alexchang-cht/teams-reader ~/dev/teams-reader
+git clone https://github.com/kokjohn0824/teams-reader ~/dev/teams-reader
 cd ~/dev/teams-reader
 bash install.sh
 ```
 
 The installer:
-1. Runs `pip install -r requirements.txt` (`websockets`, `anthropic`)
-2. Generates `~/.claude/skills/teams/SKILL.md` from the template (with correct paths)
+1. Runs `python3 -m pip install -r requirements.txt` (`websockets`, `anthropic`)
+2. Generates `~/.claude/skills/teams/SKILL.md` from the template (with correct absolute paths)
 3. Makes `teams_launch.sh` executable
+
+After install, **restart Claude Code** (or run `/reload`) so it picks up the new `/teams` skill.
 
 ---
 
@@ -157,7 +159,7 @@ python3 teams.py analyze --chat "Alice" -f json
 | Message reading / sending | CDP WebSocket (cross-platform) | Same |
 | AI analysis | Anthropic API (cross-platform) | Same |
 
-A Windows port is feasible but not implemented. The CDP-based read/send logic in `teams.py` is already platform-neutral — only the navigation layer needs porting.
+**No Windows support currently.** The CDP read/send logic (`teams.py` lines for WebSocket) is already platform-neutral, but the navigation layer (`osascript`, `Quartz`) has no Windows equivalent in this codebase. A Windows port would need to replace those two components; contributions welcome.
 
 ---
 
