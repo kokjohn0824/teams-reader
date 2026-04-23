@@ -74,11 +74,13 @@ def get_chat_target(chat_name: str | None = None) -> dict | None:
     """Find the CDP page target for a given chat (or current chat if None)."""
     targets = cdp_targets()
     if chat_name:
-        # Exact then partial match
+        # Exact then partial match — do NOT fall through to generic fallback
+        # when a name is given, to avoid silently sending to the wrong chat.
         for t in targets:
             if t.get("type") == "page" and chat_name in t.get("title", ""):
                 return t
-    # Fallback: any Chat | page
+        return None
+    # No name given → return whichever Chat page is currently open
     return next((t for t in targets
                  if t.get("type") == "page" and "Chat |" in t.get("title", "")), None)
 
@@ -319,7 +321,7 @@ async def read_messages(ws_url: str) -> list[dict]:
 
 async def send_message(ws_url: str, text: str) -> bool:
     """Type and send a message in the current Teams chat via CDP."""
-    # 1. Focus the compose box
+    # 1. Focus compose box
     focus_js = """
 (function(){
     const box = document.querySelector('[data-tid="ckeditor"]') ||
@@ -328,32 +330,50 @@ async def send_message(ws_url: str, text: str) -> bool:
     if (!box) return false;
     box.focus();
     box.click();
-    return true;
+    return box.innerText.trim().length > 0;  // true = has draft to clear
 })()
 """
-    ok = await cdp_eval(ws_url, focus_js)
-    if not ok:
+    has_draft = await cdp_eval(ws_url, focus_js)
+    if has_draft is None:
         return False
 
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(0.2)
 
-    # 2. Insert text
     async with websockets.connect(ws_url, max_size=10 * 1024 * 1024, open_timeout=5) as ws:
+        cmd_id = 1
+
+        # 2. If there's a draft, clear it with Cmd+A → Backspace
+        if has_draft:
+            for key, code, vk, mod in [("a", "KeyA", 65, 4), ("Backspace", "Backspace", 8, 0)]:
+                for ev in ["keyDown", "keyUp"]:
+                    await ws.send(json.dumps({"id": cmd_id, "method": "Input.dispatchKeyEvent",
+                        "params": {"type": ev, "key": key, "code": code,
+                                   "windowsVirtualKeyCode": vk, "modifiers": mod}}))
+                    await ws.recv()
+                    cmd_id += 1
+            await asyncio.sleep(0.2)
+
+        # 3. Insert text
         await ws.send(json.dumps({
-            "id": 1, "method": "Input.insertText", "params": {"text": text}
+            "id": cmd_id, "method": "Input.insertText", "params": {"text": text}
         }))
         await ws.recv()
+        cmd_id += 1
 
     await asyncio.sleep(0.3)
 
-    # 3. Click the send button.
-    # Teams default keybinding is Cmd+Enter (not plain Enter), so dispatching
-    # a bare Enter keydown adds a newline instead of sending.
+    # 3. Notify React that content changed, then click the send button.
+    # Teams uses two data-tid values depending on context:
+    #   sendMessageCommands-send  → reply composer (active/recent chats)
+    #   newMessageCommands-send   → new-message composer (quiet/older chats)
+    # Plain Enter adds a newline (Teams default is Cmd+Enter to send).
     send_js = """
 (function(){
+    const box = document.querySelector('[data-tid="ckeditor"]') ||
+                document.querySelector('[role="textbox"]');
+    if (box) box.dispatchEvent(new InputEvent('input', {bubbles: true, cancelable: true}));
     const btn = document.querySelector('[data-tid="sendMessageCommands-send"]') ||
-                document.querySelector('[aria-label="Send"]') ||
-                document.querySelector('button[aria-label*="Send"]');
+                document.querySelector('[data-tid="newMessageCommands-send"]');
     if (!btn || btn.disabled) return false;
     btn.click();
     return true;
