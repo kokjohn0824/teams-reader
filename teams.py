@@ -93,6 +93,19 @@ def get_main_page_target() -> dict | None:
     return next((t for t in pages if len(t.get("title", "")) > 3), None)
 
 
+def get_rich_target() -> dict | None:
+    """Return the Teams page with the fullest DOM (Calendar page has full layout + nav)."""
+    targets = cdp_targets()
+    pages = [t for t in targets if t.get("type") == "page"
+             and "teams.microsoft.com" in t.get("url", "")]
+    # Prefer the Calendar page (richest DOM), then any chat page, then any Teams page
+    for prefer in ["Calendar", "Chat |", ""]:
+        found = next((t for t in pages if prefer in t.get("title", "")), None)
+        if found:
+            return found
+    return None
+
+
 # ──────────────────── 側欄（AX API）────────────────────
 
 _OUTLINE_SCRIPT = """
@@ -209,6 +222,25 @@ async def ensure_chat_view():
         pass
 
 
+async def ensure_activity_view() -> bool:
+    """Switch Teams to the Activity feed. Returns True if navigation succeeded."""
+    page = get_rich_target()
+    if not page:
+        return False
+    js = """(function(){
+        const btn = Array.from(document.querySelectorAll('button'))
+            .find(e => (e.getAttribute('aria-label') || '').startsWith('Activity'));
+        if (btn) { btn.click(); return 'ok'; }
+        return 'nf';
+    })()"""
+    try:
+        result = await cdp_eval(page["webSocketDebuggerUrl"], js)
+        await asyncio.sleep(2.0)
+        return result == "ok"
+    except Exception:
+        return False
+
+
 def navigate_cgevent(cx: float, cy: float):
     try:
         from Quartz.CoreGraphics import (
@@ -315,6 +347,49 @@ _MSG_JS = """
 async def read_messages(ws_url: str) -> list[dict]:
     raw = await cdp_eval(ws_url, _MSG_JS)
     return raw if raw else []
+
+
+# ──────────────────── 活動摘要 ────────────────────
+
+_ACTIVITY_JS = """
+(function() {
+    const items = Array.from(document.querySelectorAll('[data-tid="activity-feed-list-item"]'));
+    if (!items.length) {
+        return { error: 'no activity-feed-list-item found',
+                 tids: Array.from(document.querySelectorAll('[data-tid]'))
+                     .map(e => e.getAttribute('data-tid')).slice(0, 30) };
+    }
+    return items.map(item => {
+        const titleEl = item.querySelector('[data-tid="activity-feed-item-title"]');
+        const title = titleEl ? titleEl.innerText.trim() : '';
+        // Timestamp is often a plain text node or a <span> inside the item
+        const rawText = (item.innerText || '').trim();
+        const lines = rawText.split('\\n').map(l => l.trim()).filter(Boolean);
+        // Time-like tokens (e.g. "9:11 PM", "4/22") — pick the shortest one
+        const TIME_RE = /^(\\d+:\\d+\\s*(AM|PM)?|\\d+\\/\\d+)$/;
+        const timePart = lines.find(l => TIME_RE.test(l)) || '';
+        const otherLines = lines.filter(l => l !== title && l !== timePart);
+        return {
+            title,
+            time: timePart,
+            preview: otherLines.join(' | '),
+        };
+    }).filter(i => i.title.length > 0);
+})()
+"""
+
+
+def get_activity_target() -> dict | None:
+    """Return the CDP target for the Activity feed page (created after navigating to Activity)."""
+    return next(
+        (t for t in cdp_targets()
+         if t.get("type") == "page" and t.get("title", "").startswith("Activity")),
+        None,
+    )
+
+
+async def read_activity_feed(ws_url: str):
+    return await cdp_eval(ws_url, _ACTIVITY_JS)
 
 
 # ──────────────────── 訊息傳送 ────────────────────
@@ -692,6 +767,70 @@ def cmd_mentions(args):
     asyncio.run(_mentions_async(args))
 
 
+async def _activity_async(args):
+    if not is_connected():
+        print("❌ Run ./teams_launch.sh first"); sys.exit(1)
+
+    print("🔄 Navigating to Activity feed...", file=sys.stderr)
+    ok = await ensure_activity_view()
+    if not ok:
+        print("❌ Could not find Activity button in Teams nav"); sys.exit(1)
+
+    # After navigation, Teams creates/updates a page whose title starts with "Activity"
+    page = get_activity_target() or get_rich_target()
+    if not page:
+        print("❌ No Teams page target found"); sys.exit(1)
+
+    raw = await read_activity_feed(page["webSocketDebuggerUrl"])
+
+    if isinstance(raw, dict) and raw.get("error"):
+        print(f"❌ Activity feed error: {raw['error']}")
+        print(f"   Body snippet: {raw.get('body_snippet','')}")
+        sys.exit(1)
+
+    if isinstance(raw, dict) and raw.get("fallback"):
+        blocks = raw.get("blocks", [])
+        if args.format == "json":
+            print(json.dumps({"fallback": True, "blocks": blocks}, ensure_ascii=False, indent=2))
+        else:
+            print(f"📋 Activity feed (fallback mode — {len(blocks)} blocks):")
+            for b in blocks[:args.limit or len(blocks)]:
+                print(f"\n  {b['text'][:300]}")
+        return
+
+    items = raw or []
+    limit = args.limit or len(items)
+    display = items[:limit]
+
+    if args.format == "json":
+        print(json.dumps({"count": len(items), "items": display}, ensure_ascii=False, indent=2))
+    else:
+        print(f"📋 Activity feed — {len(items)} items")
+        for item in display:
+            t = item.get("time", "")
+            title = item.get("title", "")
+            preview = item.get("preview", "")
+            print(f"\n[{t}] {title}")
+            if preview:
+                print(f"     {preview[:200]}")
+
+    if args.analyze and items:
+        print("\n🤖 Analyzing with Claude...", file=sys.stderr)
+        pseudo = [{"name": "Activity", "messages": [
+            {"time": i.get("time", ""), "sender": i.get("title", ""),
+             "body": i.get("preview", "")}
+            for i in items
+        ]}]
+        result = analyze_with_claude(pseudo)
+        print("\n" + "=" * 60)
+        print(result["analysis"])
+        print("=" * 60)
+
+
+def cmd_activity(args):
+    asyncio.run(_activity_async(args))
+
+
 # ──────────────────── CLI 入口 ────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
@@ -742,6 +881,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=20)
     p.add_argument("-f", "--format", default="table", choices=["table", "json"])
 
+    # activity
+    p = sub.add_parser("activity", help="Read the Teams Activity feed (recent notifications)")
+    p.add_argument("--limit", type=int, default=20, help="Max items to show (default: 20)")
+    p.add_argument("--analyze", action="store_true", help="Run Claude analysis")
+    p.add_argument("-f", "--format", default="table", choices=["table", "json"])
+
     return parser
 
 
@@ -754,6 +899,7 @@ COMMANDS = {
     "search": cmd_search,
     "analyze": cmd_analyze,
     "mentions": cmd_mentions,
+    "activity": cmd_activity,
 }
 
 
