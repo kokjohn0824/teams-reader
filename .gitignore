@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# 含有真實訊息內容的快取檔，不納入版本控制
+teams_messages.json
+
+# 開發過程紀錄，含個人帳號與 tenant 資訊
+FAILURE_REPORT.md
+
+# 早期原型，已被 teams.py 取代
+teams_reader.py
+teams_accessibility_reader.py

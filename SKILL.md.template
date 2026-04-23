@@ -1,0 +1,125 @@
+---
+name: teams
+description: "Use when reading Microsoft Teams messages, sending messages, searching chat history, checking unread chats, or analyzing Teams conversations for TODOs and suggested replies. Requires Teams to be running with CDP debug port."
+allowed-tools: Bash(python3 {{INSTALL_DIR}}/teams.py *), Bash(bash {{INSTALL_DIR}}/teams_launch.sh)
+argument-hint: "<command> [options] — or describe what you want in natural language"
+---
+
+# Teams — Microsoft Teams CLI for Claude Code
+
+CDP-based: **< 0.1 second** per chat read. Requires Teams launched via `teams_launch.sh`.
+
+## Quick Start
+
+```bash
+# 1. First-time setup (or after Teams restart)
+bash {{INSTALL_DIR}}/teams_launch.sh
+
+# 2. Verify connection
+python3 {{INSTALL_DIR}}/teams.py status
+```
+
+## Command Reference
+
+```bash
+# Connection
+python3 teams.py status                        # Check Teams + CDP connection
+
+# Browse chats
+python3 teams.py list                          # List all visible chats
+python3 teams.py list -f json                  # JSON output
+
+# Read messages
+python3 teams.py read                          # Read current chat (last 20)
+python3 teams.py read --chat "Alice"           # Read specific chat
+python3 teams.py read --chat "Project X" --limit 50
+python3 teams.py read --chat "Bob" -f json     # JSON output for processing
+
+# Unread chats
+python3 teams.py unread                        # Read all unread chats
+python3 teams.py unread --analyze              # + Claude analysis (TODOs + replies)
+python3 teams.py unread --limit 3              # Max 3 unread chats
+
+# Send messages
+python3 teams.py send --chat "Alice" --message "Got it, I'll take a look"
+
+# Search
+python3 teams.py search --query "SFTP"        # Search current chat
+python3 teams.py search --query "TODO" --chat "Project X"
+
+# AI Analysis
+python3 teams.py analyze --chat "Alice"       # TODOs + suggested replies
+python3 teams.py analyze -f json              # JSON output
+
+# @Mentions
+python3 teams.py mentions                     # Find all @YourName mentions
+python3 teams.py mentions --limit 5
+```
+
+## Task Routing
+
+| User wants | Command |
+|---|---|
+| Check if Teams is ready | `status` |
+| See all chats | `list` |
+| Read a specific chat | `read --chat "name"` |
+| Act on unread messages | `unread --analyze` |
+| Send a reply | `send --chat "name" --message "text"` |
+| Find something mentioned | `search --query "keyword"` |
+| Get AI summary + TODOs | `analyze --chat "name"` |
+| Check @mentions | `mentions` |
+
+## Output Formats
+
+All commands support `-f json` for structured output:
+```bash
+python3 teams.py read --chat "Alice" -f json
+# → { "chat": "...", "count": N, "messages": [{"time":"...","sender":"...","body":"..."},...] }
+
+python3 teams.py unread -f json
+# → { "unread_count": N, "chats": [...] }
+
+python3 teams.py analyze --chat "X" -f json
+# → { "analysis": "...", "model": "...", "input_tokens": N, ... }
+```
+
+## Setup Details
+
+Teams must be launched with CDP debug port:
+```bash
+bash {{INSTALL_DIR}}/teams_launch.sh
+```
+
+This is required **once per Teams restart**. The launcher checks if Teams is already running with CDP and skips the restart if so.
+
+## Common Patterns for Agents
+
+**Check unread, then reply:**
+```bash
+python3 teams.py unread -f json        # Get all unread as JSON
+python3 teams.py analyze --chat "X"   # Get TODOs for specific chat
+python3 teams.py send --chat "X" --message "..."  # Send reply
+```
+
+**Search across a chat for context:**
+```bash
+python3 teams.py search --query "keyword" --chat "Project X" -f json
+```
+
+**Daily digest:**
+```bash
+python3 teams.py unread --analyze      # Reads all unread + AI analysis
+```
+
+## Known Limitations
+
+- Sidebar scan shows only currently visible chats (scroll down in Teams to load more)
+- `send` requires CDP session (not available without `teams_launch.sh`)
+- Navigation between chats takes ~2-3 seconds (CGEvent mouse click)
+- Teams must not be minimized during reads
+- After Teams updates, may need to re-run `teams_launch.sh`
+- **macOS only** — depends on AppleScript and Quartz (no Windows/Linux support)
+
+## Script Location
+
+`{{INSTALL_DIR}}/teams.py`
