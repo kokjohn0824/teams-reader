@@ -337,24 +337,30 @@ async def send_message(ws_url: str, text: str) -> bool:
 
     await asyncio.sleep(0.3)
 
-    # 2. Type the text using CDP Input.insertText (respects contenteditable)
+    # 2. Insert text
     async with websockets.connect(ws_url, max_size=10 * 1024 * 1024, open_timeout=5) as ws:
-        # Insert text
         await ws.send(json.dumps({
             "id": 1, "method": "Input.insertText", "params": {"text": text}
         }))
         await ws.recv()
-        await asyncio.sleep(0.2)
 
-        # Press Enter to send
-        for event_type in ["keyDown", "keyUp"]:
-            await ws.send(json.dumps({
-                "id": 2, "method": "Input.dispatchKeyEvent",
-                "params": {"type": event_type, "key": "Enter",
-                           "code": "Enter", "windowsVirtualKeyCode": 13}
-            }))
-            await ws.recv()
-        return True
+    await asyncio.sleep(0.3)
+
+    # 3. Click the send button.
+    # Teams default keybinding is Cmd+Enter (not plain Enter), so dispatching
+    # a bare Enter keydown adds a newline instead of sending.
+    send_js = """
+(function(){
+    const btn = document.querySelector('[data-tid="sendMessageCommands-send"]') ||
+                document.querySelector('[aria-label="Send"]') ||
+                document.querySelector('button[aria-label*="Send"]');
+    if (!btn || btn.disabled) return false;
+    btn.click();
+    return true;
+})()
+"""
+    sent = await cdp_eval(ws_url, send_js)
+    return bool(sent)
 
 
 # ──────────────────── Claude 分析 ────────────────────
